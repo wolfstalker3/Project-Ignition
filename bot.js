@@ -447,7 +447,17 @@ const TIMEZONES = [
   'NST', 'ART', 'CLT', 'PYT', 'BOT', 'VET', 'GYT', 'EST', 'COT', 'PET',
   'ECT', 'ACT', 'CST', 'EAST', 'GALT', 'MART', 'SST', 'BIT', 'CHAST',
   'KOST', 'MIST', 'NFT', 'PONT', 'SAKT', 'SBT', 'VUT', 'FJT', 'GILT',
-  'MHT', 'NRT', 'NZST', 'PHOT', 'TKT', 'TOT', 'WAKT', 'CHADT', 'WST'
+  'MHT', 'NRT', 'NZST', 'PHOT', 'TKT', 'TOT', 'WAKT', 'CHADT', 'WST',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 
+  'America/Anchorage', 'Pacific/Honolulu', 'America/Phoenix', 'America/Indiana/Indianapolis',
+  'America/Kentucky/Louisville', 'America/Detroit', 'America/Boise', 'America/Juneau',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+  'Europe/Amsterdam', 'Europe/Stockholm', 'Europe/Vienna', 'Europe/Brussels',
+  'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Kolkata', 'Asia/Dubai', 'Asia/Jerusalem',
+  'Asia/Seoul', 'Asia/Singapore', 'Asia/Hong_Kong', 'Asia/Bangkok', 'Asia/Karachi',
+  'Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Adelaide',
+  'Pacific/Auckland', 'Pacific/Fiji', 'America/Sao_Paulo', 'America/Mexico_City',
+  'America/Toronto', 'America/Vancouver', 'America/Montreal', 'America/Argentina/Buenos_Aires'
 ];
 
 // Theme system
@@ -1219,7 +1229,7 @@ const profileCommand = new SlashCommandBuilder()
         opt.setName('timezone')
           .setDescription('Your timezone')
           .setRequired(false)
-          .addChoices(...TIMEZONES.slice(0, 25).map(tz => ({ name: tz, value: tz })))
+          .addChoices(...TIMEZONES.map(tz => ({ name: tz, value: tz })))
       )
       .addStringOption(opt => opt.setName('pronouns').setDescription('Your pronouns').setRequired(false))
       .addStringOption(opt => 
@@ -1233,6 +1243,9 @@ const profileCommand = new SlashCommandBuilder()
             { name: 'Speedrunner', value: 'speedrunner' }
           )
       )
+      .addStringOption(opt => opt.setName('games').setDescription('Your favorite games (comma-separated)').setRequired(false))
+      .addStringOption(opt => opt.setName('role').setDescription('Your main role in games').setRequired(false))
+      .addStringOption(opt => opt.setName('rank').setDescription('Your current rank').setRequired(false))
   )
   .addSubcommand(sub =>
     sub.setName('view')
@@ -1248,7 +1261,7 @@ const profileCommand = new SlashCommandBuilder()
         opt.setName('timezone')
           .setDescription('Your timezone')
           .setRequired(false)
-          .addChoices(...TIMEZONES.slice(0, 25).map(tz => ({ name: tz, value: tz })))
+          .addChoices(...TIMEZONES.map(tz => ({ name: tz, value: tz })))
       )
       .addStringOption(opt => opt.setName('pronouns').setDescription('Your pronouns').setRequired(false))
       .addStringOption(opt => 
@@ -1261,6 +1274,9 @@ const profileCommand = new SlashCommandBuilder()
             { name: 'Hardcore', value: 'hardcore' }
           )
       )
+      .addStringOption(opt => opt.setName('games').setDescription('Your favorite games (comma-separated)').setRequired(false))
+      .addStringOption(opt => opt.setName('role').setDescription('Your main role in games').setRequired(false))
+      .addStringOption(opt => opt.setName('rank').setDescription('Your current rank').setRequired(false))
   )
   .addSubcommand(sub =>
     sub.setName('game')
@@ -1280,6 +1296,11 @@ const profileCommand = new SlashCommandBuilder()
             { name: 'Expert', value: 'expert' }
           )
       )
+  )
+  .addSubcommand(sub =>
+    sub.setName('game-config')
+      .setDescription('Configure game information using configured roles and ranks')
+      .addStringOption(opt => opt.setName('game').setDescription('Game name').setRequired(true))
   )
   .addSubcommand(sub =>
     sub.setName('games')
@@ -1432,6 +1453,9 @@ client.on('interactionCreate', async interaction => {
         const timezone = options.getString('timezone') || 'UTC';
         const pronouns = options.getString('pronouns') || '';
         const playstyle = options.getString('playstyle') || 'casual';
+        const gamesString = options.getString('games');
+        const role = options.getString('role');
+        const rank = options.getString('rank');
         
         let profile = dataManager.getProfile(user.id, guildId);
         if (profile) {
@@ -1445,8 +1469,10 @@ client.on('interactionCreate', async interaction => {
           competitiveLevel: playstyle === 'competitive' ? 'high' : 'medium',
           communication: 'both',
           availability: 'evenings',
-          genres: []
+          genres: gamesString ? gamesString.split(',').map(g => g.trim()) : []
         };
+
+        const favoriteGames = gamesString ? gamesString.split(',').map(g => g.trim()) : [];
 
         profile = dataManager.createProfile(user.id, guildId, {
           gamertag,
@@ -1454,7 +1480,13 @@ client.on('interactionCreate', async interaction => {
           timezone,
           pronouns,
           playstyle,
-          gamePreferences
+          favoriteGames,
+          gamePreferences,
+          stats: {
+            ...dataManager.getProfile(user.id, guildId)?.stats || {},
+            favoriteRole: role || 'Flex',
+            rank: rank || 'Unranked'
+          }
         });
         
         awardAchievement(user.id, guildId, 'first_profile');
@@ -1472,6 +1504,16 @@ client.on('interactionCreate', async interaction => {
           )
           .setFooter({ text: 'Use /profile game to add specific games or /profile edit to update information' });
 
+        if (favoriteGames.length > 0) {
+          embed.addFields({ name: '🎮 Favorite Games', value: favoriteGames.join(', '), inline: true });
+        }
+        if (role) {
+          embed.addFields({ name: ' Role', value: role, inline: true });
+        }
+        if (rank) {
+          embed.addFields({ name: ' Rank', value: rank, inline: true });
+        }
+
         await interaction.editReply({ embeds: [embed] });
       }
       else if (subcommand === 'edit') {
@@ -1480,6 +1522,9 @@ client.on('interactionCreate', async interaction => {
         const timezone = options.getString('timezone');
         const pronouns = options.getString('pronouns');
         const playstyle = options.getString('playstyle');
+        const gamesString = options.getString('games');
+        const role = options.getString('role');
+        const rank = options.getString('rank');
         
         const profile = dataManager.getProfile(user.id, guildId);
         if (!profile) {
@@ -1494,6 +1539,16 @@ client.on('interactionCreate', async interaction => {
         if (timezone) updates.timezone = timezone;
         if (pronouns !== null) updates.pronouns = pronouns;
         if (playstyle) updates.playstyle = playstyle;
+        
+        // Handle games, role, and rank updates
+        if (gamesString) {
+          updates.favoriteGames = gamesString.split(',').map(g => g.trim());
+        }
+        if (role || rank) {
+          if (!updates.stats) updates.stats = {};
+          if (role) updates.stats.favoriteRole = role;
+          if (rank) updates.stats.rank = rank;
+        }
 
         if (Object.keys(updates).length === 0) {
           return interaction.editReply({
@@ -1510,7 +1565,18 @@ client.on('interactionCreate', async interaction => {
           .setTimestamp();
 
         Object.entries(updates).forEach(([key, value]) => {
-          embed.addFields({ name: key.charAt(0).toUpperCase() + key.slice(1), value: value || 'Not set', inline: true });
+          if (key === 'stats') {
+            if (value.favoriteRole) {
+              embed.addFields({ name: 'Favorite Role', value: value.favoriteRole, inline: true });
+            }
+            if (value.rank) {
+              embed.addFields({ name: 'Rank', value: value.rank, inline: true });
+            }
+          } else if (key === 'favoriteGames') {
+            embed.addFields({ name: 'Favorite Games', value: value.join(', '), inline: true });
+          } else {
+            embed.addFields({ name: key.charAt(0).toUpperCase() + key.slice(1), value: value || 'Not set', inline: true });
+          }
         });
 
         await interaction.editReply({ embeds: [embed] });
@@ -1539,12 +1605,12 @@ client.on('interactionCreate', async interaction => {
         };
 
         if (gameConfig) {
-          if (role && gameConfig.roles.length > 0 && !gameConfig.roles.includes(role)) {
+          if (role && gameConfig.roles && gameConfig.roles.length > 0 && !gameConfig.roles.includes(role)) {
             return interaction.editReply({
               content: `❌ Invalid role. Available roles for ${gameName}: ${gameConfig.roles.join(', ')}`
             });
           }
-          if (rank && gameConfig.ranks.length > 0 && !gameConfig.ranks.includes(rank)) {
+          if (rank && gameConfig.ranks && gameConfig.ranks.length > 0 && !gameConfig.ranks.includes(rank)) {
             return interaction.editReply({
               content: `❌ Invalid rank. Available ranks for ${gameName}: ${gameConfig.ranks.join(', ')}`
             });
@@ -1628,6 +1694,75 @@ client.on('interactionCreate', async interaction => {
           );
 
         await interaction.editReply({ embeds: [embed] });
+      }
+      else if (subcommand === 'game-config') {
+        const gameName = options.getString('game');
+        const profile = dataManager.getProfile(user.id, guildId);
+        if (!profile) {
+          return interaction.editReply({
+            content: '❌ You need to create a profile first with `/profile create`.'
+          });
+        }
+
+        const gameConfig = dataManager.getGameConfig(guildId, gameName);
+        if (!gameConfig) {
+          return interaction.editReply({
+            content: `❌ No game configuration found for **${gameName}**. Please ask an admin to set it up with the setup command first.`
+          });
+        }
+
+        // Create modal for game configuration
+        const { ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+        
+        const modal = new ModalBuilder()
+          .setCustomId(`game_config_${gameName}_${user.id}`)
+          .setTitle(`Configure ${gameName} Profile`);
+        
+        // Role selection
+        if (gameConfig.roles && gameConfig.roles.length > 0) {
+          const roleInput = new TextInputBuilder()
+            .setCustomId('role_input')
+            .setLabel('Your role in this game')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder(`Available: ${gameConfig.roles.join(', ')}`)
+            .setRequired(false);
+          
+          modal.addComponents(new ActionRowBuilder().addComponents(roleInput));
+        }
+        
+        // Rank selection
+        if (gameConfig.ranks && gameConfig.ranks.length > 0) {
+          const rankInput = new TextInputBuilder()
+            .setCustomId('rank_input')
+            .setLabel('Your rank in this game')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder(`Available: ${gameConfig.ranks.join(', ')}`)
+            .setRequired(false);
+          
+          modal.addComponents(new ActionRowBuilder().addComponents(rankInput));
+        }
+        
+        // Hours played
+        const hoursInput = new TextInputBuilder()
+          .setCustomId('hours_input')
+          .setLabel('Hours played')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Enter number of hours')
+          .setRequired(false);
+        
+        modal.addComponents(new ActionRowBuilder().addComponents(hoursInput));
+        
+        // Skill level
+        const skillInput = new TextInputBuilder()
+          .setCustomId('skill_input')
+          .setLabel('Skill level')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Beginner, Intermediate, Advanced, Expert, etc.')
+          .setRequired(false);
+        
+        modal.addComponents(new ActionRowBuilder().addComponents(skillInput));
+        
+        await interaction.showModal(modal);
       }
     }
     else if (commandName === 'setup') {
