@@ -984,7 +984,7 @@ async function expireLFGPost(post, reason) {
   }
 }
 
-// Enhanced LFG cleanup
+// Enhanced LFG cleanup with inactivity timer
 function cleanupOldLFGPosts() {
   const now = new Date();
   const lfgPosts = dataManager.lfgPosts;
@@ -995,8 +995,16 @@ function cleanupOldLFGPosts() {
     const postDate = new Date(post.createdAt);
     const hoursSinceCreation = (now - postDate) / (1000 * 60 * 60);
     
-    // Expire after 24 hours
-    if (hoursSinceCreation >= 24) {
+    // Check for inactivity (10 minutes since last activity)
+    const lastActivity = new Date(post.lastActivity);
+    const minutesSinceActivity = (now - lastActivity) / (1000 * 60);
+    
+    // Expire if inactive for more than 10 minutes
+    if (minutesSinceActivity > 10) {
+      await expireLFGPost(post, 'Inactivity timeout (10 minutes)');
+    }
+    // Expire after 24 hours regardless
+    else if (hoursSinceCreation >= 24) {
       await expireLFGPost(post, '24-hour time limit reached');
     }
   });
@@ -1119,7 +1127,13 @@ client.once('clientReady', async () => {
                 { name: 'Bio', value: 'bio' },
                 { name: 'Timezone', value: 'timezone' },
                 { name: 'Pronouns', value: 'pronouns' },
-                { name: 'Playstyle', value: 'playstyle' }
+                { name: 'Playstyle', value: 'playstyle' },
+                { name: 'Favorite Games', value: 'favorite_games' },
+                { name: 'Availability', value: 'availability' },
+                { name: 'Socials', value: 'socials' },
+                { name: 'Communication Method', value: 'communication' },
+                { name: 'Competitive Level', value: 'competitive_level' },
+                { name: 'Game Genres', value: 'genres' }
               )
           )
           .addStringOption(opt => opt.setName('value').setDescription('New value').setRequired(true))
@@ -1579,27 +1593,45 @@ client.on('interactionCreate', async interaction => {
       else if (subcommand === 'list') {
         const gameFilter = options.getString('game');
         let lfgPosts;
-        
+
         if (gameFilter) {
           lfgPosts = dataManager.getLFGPostsByGame(guildId, gameFilter);
         } else {
           lfgPosts = dataManager.getAllLFGPosts(guildId);
         }
-        
+
+        // Filter out full posts and archived posts, and only show active ones
+        lfgPosts = lfgPosts.filter(post => 
+          post.status === 'active' && 
+          (post.slots <= 0 || post.participants.length < post.slots) // Not full
+        );
+
         if (lfgPosts.length === 0) {
           return interaction.editReply({
-            content: `❌ No active LFG posts found${gameFilter ? ` for ${gameFilter}` : ''}!`
+            content: `❌ No active, non-full LFG posts found${gameFilter ? ` for ${gameFilter}` : ''}!`
           });
         }
 
         const embed = new EmbedBuilder()
           .setTitle(`🔍 Active LFG Posts${gameFilter ? ` - ${gameFilter}` : ''}`)
           .setColor('#00FF00')
-          .setDescription(lfgPosts.map(post => 
-            `**${post.game}** - ${post.activity}\n` +
-            `👥 ${post.participants.length}/${post.slots} • 🎮 ${post.playstyle} • 🕐 ${post.time}\n` +
-            `ID: ${post.id}\n`
-          ).join('\n'));
+          .setDescription(lfgPosts.map(post => {
+            // Calculate time since creation for real-time indicator
+            const createdAt = new Date(post.createdAt);
+            const timeAgo = Math.floor((Date.now() - createdAt.getTime()) / (1000 * 60)); // minutes ago
+            let timeIndicator = '';
+            
+            if (timeAgo < 1) timeIndicator = 'Just now';
+            else if (timeAgo < 60) timeIndicator = `${timeAgo}m ago`;
+            else {
+              const hoursAgo = Math.floor(timeAgo / 60);
+              timeIndicator = `${hoursAgo}h ago`;
+            }
+            
+            return `**${post.game}** - ${post.activity}\n` +
+                   `👥 ${post.participants.length}/${post.slots} • 🎮 ${post.playstyle} • 🕐 ${post.time} • ⏱️ ${timeIndicator}\n` +
+                   `ID: ${post.id}\n`;
+          }).join('\n'));
 
         await interaction.editReply({ embeds: [embed] });
       }
@@ -1877,6 +1909,12 @@ client.on('interactionCreate', async interaction => {
         else if (field === 'timezone') updates.timezone = value;
         else if (field === 'pronouns') updates.pronouns = value;
         else if (field === 'playstyle') updates.playstyle = value;
+        else if (field === 'favorite_games') updates.favoriteGames = value.split(',').map(g => g.trim());
+        else if (field === 'availability') updates.availability = value;
+        else if (field === 'socials') updates.socials = value;
+        else if (field === 'communication') updates.gamePreferences = { ...profile.gamePreferences, communication: value };
+        else if (field === 'competitive_level') updates.gamePreferences = { ...profile.gamePreferences, competitiveLevel: value };
+        else if (field === 'genres') updates.gamePreferences = { ...profile.gamePreferences, genres: value.split(',').map(g => g.trim()) };
 
         dataManager.updateProfile(user.id, guildId, updates);
 
@@ -2247,6 +2285,148 @@ client.on('interactionCreate', async interaction => {
           )
           .setTimestamp();
 
+        await interaction.editReply({ embeds: [embed] });
+      }
+    }
+
+    // Handle stats commands
+    else if (commandName === 'stats') {
+      const subcommand = options.getSubcommand();
+      
+      if (subcommand === 'view') {
+        const targetUser = options.getUser('user') || user;
+        const profile = dataManager.getProfile(targetUser.id, guildId);
+        
+        if (!profile) {
+          return interaction.editReply({ 
+            content: `❌ ${targetUser.id === user.id ? 'You don\\'t have' : 'This user doesn\\'t have'} a profile yet. Use \\`/profile create\\` to make one.` 
+          });
+        }
+        
+        const embed = new EmbedBuilder()
+          .setTitle(`📊 ${targetUser.username}'s Stats`)
+          .setColor('#5865F2')
+          .setThumbnail(targetUser.displayAvatarURL())
+          .addFields(
+            { name: '🏆 Level', value: `${profile.level}`, inline: true },
+            { name: '⭐ XP', value: `${profile.xp}`, inline: true },
+            { name: '🎮 Games Played', value: `${profile.stats?.gamesPlayed || 0}`, inline: true },
+            { name: '⏱️ Hours Played', value: `${profile.stats?.hoursPlayed || 0}`, inline: true },
+            { name: '✅ Matches Won', value: `${profile.stats?.matchesWon || 0}`, inline: true },
+            { name: '❌ Matches Lost', value: `${profile.stats?.matchesLost || 0}`, inline: true },
+            { name: '📈 Win Rate', value: profile.stats?.matchesPlayed > 0 ? 
+              `${Math.round((profile.stats.matchesWon / profile.stats.matchesPlayed) * 100)}%` : 
+              '0%', inline: true },
+            { name: '🔥 Current Win Streak', value: `${profile.stats?.winStreak || 0}`, inline: true },
+            { name: '🏆 Best Win Streak', value: `${profile.stats?.bestWinStreak || 0}`, inline: true },
+            { name: '🥇 Rank', value: profile.stats?.rank || 'Unranked', inline: true },
+            { name: '🎯 Favorite Role', value: profile.stats?.favoriteRole || 'Flex', inline: true },
+            { name: '🏆 Achievements', value: `${profile.achievements?.length || 0} earned`, inline: true }
+          )
+          .setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+      }
+      
+      else if (subcommand === 'log') {
+        const gameName = options.getString('game');
+        const result = options.getString('result');
+        const duration = options.getInteger('duration') || 0;
+        const role = options.getString('role');
+        
+        const profile = dataManager.getProfile(user.id, guildId);
+        if (!profile) {
+          return interaction.editReply({ 
+            content: '❌ You need to create a profile first with `/profile create`.' 
+          });
+        }
+        
+        // Update stats based on result
+        const updates = { stats: { ...profile.stats } };
+        updates.stats.gamesPlayed = (updates.stats.gamesPlayed || 0) + 1;
+        updates.stats.hoursPlayed = (updates.stats.hoursPlayed || 0) + (duration / 60);
+        
+        if (result === 'win') {
+          updates.stats.matchesWon = (updates.stats.matchesWon || 0) + 1;
+          updates.stats.winStreak = (updates.stats.winStreak || 0) + 1;
+          if (updates.stats.winStreak > (updates.stats.bestWinStreak || 0)) {
+            updates.stats.bestWinStreak = updates.stats.winStreak;
+          }
+        } else if (result === 'loss') {
+          updates.stats.matchesLost = (updates.stats.matchesLost || 0) + 1;
+          updates.stats.winStreak = 0;
+        }
+        
+        updates.stats.matchesPlayed = (updates.stats.gamesPlayed || 0);
+        
+        if (role) updates.stats.favoriteRole = role;
+        
+        dataManager.updateProfile(user.id, guildId, updates);
+        
+        const embed = new EmbedBuilder()
+          .setTitle('📊 Match Logged')
+          .setDescription(`Successfully logged a **${result.toUpperCase()}** for **${gameName}**`)
+          .setColor(result === 'win' ? '#57F287' : '#ED4245')
+          .addFields(
+            { name: 'Duration', value: duration > 0 ? `${duration} minutes` : 'Not specified', inline: true },
+            { name: 'Role', value: role || 'Not specified', inline: true },
+            { name: 'New Win Streak', value: `${updates.stats.winStreak}`, inline: true }
+          )
+          .setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+      }
+      
+      else if (subcommand === 'leaderboard') {
+        const gameFilter = options.getString('game');
+        const metric = options.getString('metric') || 'level';
+        
+        // Get all profiles and sort by the specified metric
+        const allProfiles = Object.values(dataManager.profiles)
+          .filter(profile => profile.guildId === guildId)
+          .sort((a, b) => {
+            if (metric === 'level') return b.level - a.level;
+            if (metric === 'wins') return (b.stats?.matchesWon || 0) - (a.stats?.matchesWon || 0);
+            if (metric === 'win_rate') {
+              const bRate = b.stats?.matchesPlayed > 0 ? (b.stats.matchesWon / b.stats.matchesPlayed) : 0;
+              const aRate = a.stats?.matchesPlayed > 0 ? (a.stats.matchesWon / a.stats.matchesPlayed) : 0;
+              return bRate - aRate;
+            }
+            if (metric === 'games_played') return (b.stats?.gamesPlayed || 0) - (a.stats?.gamesPlayed || 0);
+            return b.level - a.level; // Default to level
+          })
+          .slice(0, 10); // Top 10
+        
+        if (allProfiles.length === 0) {
+          return interaction.editReply({ 
+            content: '❌ No profiles found to create a leaderboard.' 
+          });
+        }
+        
+        const leaderboardText = allProfiles.map((profile, index) => {
+          const user = guild.members.cache.get(profile.userId);
+          const displayName = user ? user.user.username : 'Unknown User';
+          let value = '';
+          
+          if (metric === 'level') value = `Level ${profile.level}`;
+          else if (metric === 'wins') value = `${profile.stats?.matchesWon || 0} wins`;
+          else if (metric === 'win_rate') {
+            const rate = profile.stats?.matchesPlayed > 0 ? 
+              Math.round((profile.stats.matchesWon / profile.stats.matchesPlayed) * 100) : 0;
+            value = `${rate}% win rate`;
+          }
+          else if (metric === 'games_played') value = `${profile.stats?.gamesPlayed || 0} games`;
+          
+          return `${index + 1}. **${displayName}** - ${value}`;
+        }).join('\n');
+        
+        const embed = new EmbedBuilder()
+          .setTitle(`🏆 ${metric.replace('_', ' ').toUpperCase()} Leaderboard`)
+          .setDescription(leaderboardText)
+          .setColor('#FFD700')
+          .setFooter({ text: `Top ${allProfiles.length} ${metric.replace('_', ' ')} earners` })
+          .setTimestamp();
+        
         await interaction.editReply({ embeds: [embed] });
       }
     }
